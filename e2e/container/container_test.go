@@ -112,6 +112,51 @@ func TestContainer(t *testing.T) {
 		tests.NetworkInspect(o)
 		tests.NetworkLs(o)
 		tests.NetworkRm(o)
+
+		ginkgo.Context("when testing 'ps --filter name' with regex", func() {
+			ginkgo.It("should list only containers matching the regex pattern", func() {
+				o, err := e2e.CreateOption()
+				gomega.Expect(err).ShouldNot(gomega.HaveOccurred())
+				testID := "psfilterregex"
+				containerNameMatch1 := testID + "-app-1"
+				containerNameMatch2 := testID + "-app-2"
+				containerNameNoMatch1 := testID + "-other-1"
+				// Using public.ecr.aws/amazonlinux/amazonlinux:latest as it's used in other tests (e.g., tests.Run)
+				// However, alpine is smaller and quicker if available and suitable. Let's stick to a known one.
+				imageName := "public.ecr.aws/amazonlinux/amazonlinux:latest"
+
+				// Ensure image is pulled before creating containers to avoid race conditions or timing issues in test
+				command.New(o, "pull", imageName).WithTimeoutInSeconds(60).Run()
+
+				// Defer cleanup of containers
+				defer func() {
+					command.New(o, "rm", "-f", containerNameMatch1, containerNameMatch2, containerNameNoMatch1).WithoutCheckingExitCode().Run()
+				}()
+
+				// Create containers
+				command.New(o, "run", "-d", "--name", containerNameMatch1, imageName, "sleep", "infinity").Run()
+				command.New(o, "run", "-d", "--name", containerNameMatch2, imageName, "sleep", "infinity").Run()
+				command.New(o, "run", "-d", "--name", containerNameNoMatch1, imageName, "sleep", "infinity").Run()
+
+				// Allow some time for containers to be fully registered if needed, though ps should be quick
+				time.Sleep(2 * time.Second)
+
+				// Run ps --filter
+				// The regex ^psfilterregex-app-.* should match containerNameMatch1 and containerNameMatch2
+				outputLines := command.StdoutAsLines(o, "ps", "--filter", "name=^"+testID+"-app-.*", "--format", "{{.Names}}")
+
+				// Assertions
+				gomega.Expect(outputLines).Should(gomega.ContainElement(containerNameMatch1),
+					fmt.Sprintf("Output should contain %s", containerNameMatch1))
+				gomega.Expect(outputLines).Should(gomega.ContainElement(containerNameMatch2),
+					fmt.Sprintf("Output should contain %s", containerNameMatch2))
+				gomega.Expect(outputLines).ShouldNot(gomega.ContainElement(containerNameNoMatch1),
+					fmt.Sprintf("Output should not contain %s", containerNameNoMatch1))
+				gomega.Expect(outputLines).Should(gomega.HaveLen(2),
+					fmt.Sprintf("Output should have exactly 2 lines, got %d: %v", len(outputLines), outputLines))
+			})
+		})
+
 		testCosign(o)
 	})
 
